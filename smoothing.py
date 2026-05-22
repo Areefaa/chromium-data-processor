@@ -132,9 +132,58 @@ def write_sheet(wb: Workbook, name: str, df: pd.DataFrame, window: int, poly: in
         style_header(cell, bg=bg, fg=fg)
     ws.row_dimensions[3].height = 18
 
+    # ── Hitung nilai maksimum ──
+    raw_max_idx = absorbance.idxmax()
+    sm_max_idx  = smoothed.idxmax()
+
+    raw_max_abs = absorbance[raw_max_idx]
+    raw_max_wav = wavelength[raw_max_idx]
+    sm_max_abs  = smoothed[sm_max_idx]
+    sm_max_wav  = wavelength[sm_max_idx]
+
+    # ── Kotak info maksimum (di atas tabel, baris 3–4 kolom E–F) ──
+    COLOR_MAX_RAW = "1A5276"    # biru tua
+    COLOR_MAX_SM  = "145A32"    # hijau tua
+
+    labels = [
+        ("Max Raw",      raw_max_wav, raw_max_abs, COLOR_MAX_RAW),
+        ("Max Smoothed", sm_max_wav,  sm_max_abs,  COLOR_MAX_SM),
+    ]
+    for offset, (label, wav, abs_val, color) in enumerate(labels):
+        r_box = 3 + offset
+        # Label
+        lc = ws.cell(r_box, 5, value=label)
+        lc.font      = Font(name="Calibri", bold=True, size=10, color="FFFFFF")
+        lc.fill      = PatternFill("solid", start_color=color)
+        lc.alignment = Alignment(horizontal="center", vertical="center")
+        lc.border    = thin_border()
+        # Wavelength
+        wc = ws.cell(r_box, 6, value=round(wav, 4))
+        wc.font      = Font(name="Calibri", bold=True, size=10, color=color)
+        wc.alignment = Alignment(horizontal="right", vertical="center")
+        wc.border    = thin_border()
+        wc.number_format = "0.0000"
+        # Absorbance
+        ac = ws.cell(r_box, 7, value=round(abs_val, 9))
+        ac.font      = Font(name="Calibri", bold=True, size=10, color=color)
+        ac.alignment = Alignment(horizontal="right", vertical="center")
+        ac.border    = thin_border()
+        ac.number_format = "0.000000000"
+
+    # Header kotak info
+    for c_idx, hdr in enumerate(["Keterangan", "λ Maks (nm)", "Absorbansi Maks"], 5):
+        hc = ws.cell(2, c_idx, value=hdr)
+        style_header(hc, bg="2C3E50", fg="FFFFFF", size=9)
+    ws.merge_cells("A2:D2")   # tetap merge A2:D2 untuk info parameter
+
     # ── Data ──
     for r, (wv, raw, sm) in enumerate(zip(wavelength, absorbance, smoothed), 4):
         alt = (r % 2 == 0)
+
+        # Sorot baris nilai maksimum
+        is_raw_max = (r - 4) == raw_max_idx
+        is_sm_max  = (r - 4) == sm_max_idx
+
         cells = [
             ws.cell(r, 1, value=round(wv, 6)),
             ws.cell(r, 2, value=round(raw, 9)),
@@ -144,6 +193,17 @@ def write_sheet(wb: Workbook, name: str, df: pd.DataFrame, window: int, poly: in
         for cell in cells:
             style_data(cell, alt=alt)
 
+        # Override warna baris max raw → biru muda terang
+        if is_raw_max:
+            for cell in cells[:2]:
+                cell.fill = PatternFill("solid", start_color="AED6F1")
+                cell.font = Font(name="Calibri", bold=True, size=10, color="1A5276")
+        # Override warna baris max smoothed → hijau muda terang
+        if is_sm_max:
+            for cell in [cells[0], cells[2]]:
+                cell.fill = PatternFill("solid", start_color="A9DFBF")
+                cell.font = Font(name="Calibri", bold=True, size=10, color="145A32")
+
     # Format angka
     for r in range(4, 4 + len(wavelength)):
         ws.cell(r, 1).number_format = "0.0000"
@@ -152,7 +212,7 @@ def write_sheet(wb: Workbook, name: str, df: pd.DataFrame, window: int, poly: in
         ws.cell(r, 4).number_format = "0.000000000"
 
     # Lebar kolom
-    widths = [16, 20, 20, 18]
+    widths = [16, 20, 20, 18, 16, 16, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -188,7 +248,11 @@ def write_sheet(wb: Workbook, name: str, df: pd.DataFrame, window: int, poly: in
 
     ws.add_chart(chart, "F3")
 
-    return {"name": name, "n_points": n_rows, "wav_col": wav_col, "abs_col": abs_col}
+    return {
+        "name": name, "n_points": n_rows, "wav_col": wav_col, "abs_col": abs_col,
+        "raw_max_wav": round(raw_max_wav, 4), "raw_max_abs": round(raw_max_abs, 9),
+        "sm_max_wav":  round(sm_max_wav,  4), "sm_max_abs":  round(sm_max_abs,  9),
+    }
 
 # ── Sheet Ringkasan ───────────────────────────────────────────────────────────
 def write_summary(wb: Workbook, results: list):
@@ -216,19 +280,38 @@ def write_summary(wb: Workbook, results: list):
 
     # Tabel ringkasan
     start_row = len(params) + 3
-    hdrs = ["No", "Nama Eksperimen", "Kolom Wavelength", "Kolom Absorbance", "Jumlah Titik Data", "Sheet"]
-    for c, h in enumerate(hdrs, 1):
-        style_header(ws.cell(start_row, c, value=h))
+    hdrs = [
+        "No", "Nama Eksperimen", "Jumlah Titik",
+        "λ Maks Raw (nm)", "Abs Maks Raw",
+        "λ Maks Smoothed (nm)", "Abs Maks Smoothed",
+    ]
+    hdr_colors = [
+        COLOR_HDR_BG, COLOR_HDR_BG, COLOR_HDR_BG,
+        "1A5276", "1A5276",
+        "145A32", "145A32",
+    ]
+    for c, (h, bg) in enumerate(zip(hdrs, hdr_colors), 1):
+        style_header(ws.cell(start_row, c, value=h), bg=bg)
 
     for i, r in enumerate(results, 1):
         row = start_row + i
         alt = i % 2 == 0
-        data = [i, r["name"], r["wav_col"], r["abs_col"], r["n_points"], r["name"][:28]]
+        data = [
+            i, r["name"], r["n_points"],
+            r["raw_max_wav"], r["raw_max_abs"],
+            r["sm_max_wav"],  r["sm_max_abs"],
+        ]
         for c, val in enumerate(data, 1):
             cell = ws.cell(row, c, value=val)
             style_data(cell, alt=alt)
+            if c in (4, 5):
+                cell.number_format = "0.0000" if c == 4 else "0.000000000"
+                cell.font = Font(name="Calibri", bold=True, color="1A5276", size=10)
+            if c in (6, 7):
+                cell.number_format = "0.0000" if c == 6 else "0.000000000"
+                cell.font = Font(name="Calibri", bold=True, color="145A32", size=10)
 
-    widths = [5, 32, 22, 22, 18, 32]
+    widths = [5, 32, 14, 20, 22, 22, 22]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
